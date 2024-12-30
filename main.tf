@@ -1,11 +1,40 @@
 # EC2 Instance
+resource "aws_security_group" "minecraft_server" {
+  name        = "minecraft-server"
+  description = "Allow inbound traffic on port 25565"
+
+  ingress {
+    from_port = 22
+    to_port   = 22
+    protocol  = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    from_port = 25565
+    to_port   = 25565
+    protocol  = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port = 0
+    to_port   = 0
+    protocol  = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
 resource "aws_instance" "minecraft_server" {
-  ami           = "ami-018a608de9486664d" # Amazon Linux 2 AMI (必要に応じて変更)
+  ami           = "ami-018a608de9486664d"
   instance_type = "t4g.small"
-  key_name = "minecraft-server"
+  key_name      = "minecraft-server"
+  user_data = file("${path.module}/ec2_user_data.sh")
   tags = {
     Name = "minecraft_server"
   }
+
+  security_groups = [aws_security_group.minecraft_server.name]
 }
 
 # IAM Role for Lambda
@@ -65,7 +94,7 @@ resource "aws_lambda_function" "ec2_manager" {
   handler          = "lambda_function.lambda_handler"
   runtime          = "python3.9"
   source_code_hash = data.archive_file.lambda_function_payload.output_base64sha256
-  timeout = 30
+  timeout          = 30
   environment {
     variables = {
       EC2_INSTANCE_ID = aws_instance.minecraft_server.id
@@ -88,9 +117,9 @@ resource "aws_apigatewayv2_api" "lambda_api" {
 }
 
 resource "aws_apigatewayv2_integration" "lambda_integration" {
-  api_id             = aws_apigatewayv2_api.lambda_api.id
-  integration_type   = "AWS_PROXY"
-  integration_uri    = aws_lambda_function.ec2_manager.arn
+  api_id                 = aws_apigatewayv2_api.lambda_api.id
+  integration_type       = "AWS_PROXY"
+  integration_uri        = aws_lambda_function.ec2_manager.arn
   payload_format_version = "2.0"
 }
 
