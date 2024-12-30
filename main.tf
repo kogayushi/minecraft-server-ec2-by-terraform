@@ -84,7 +84,7 @@ resource "aws_iam_role_policy_attachment" "lambda_ec2_attach" {
 # Lambda Function
 data "archive_file" "lambda_function_payload" {
   type        = "zip"
-  source_dir  = "${path.module}/ec2_starter"
+  source_dir  = "${path.module}/lambda/ec2_starter"
   output_path = "${path.module}/build/ec2_starter/lambda_function_payload.zip"
 }
 resource "aws_lambda_function" "ec2_manager" {
