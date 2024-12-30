@@ -134,51 +134,40 @@ resource "aws_lambda_function" "basic_auth_authorizer" {
   }
 }
 
-# Lambda Permissions for CloudWatch Logs
-resource "aws_lambda_permission" "basic_auth_allow_cloudwatch" {
-  statement_id  = "AllowExecutionFromCloudWatch"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.basic_auth_authorizer.function_name
-  principal     = "events.amazonaws.com"
+resource "aws_api_gateway_rest_api" "lambda_api" {
+  name        = "minecraft-server-api"
+  description = "API for managing Minecraft server using RESTful API"
 }
 
-# API Gateway
-resource "aws_apigatewayv2_api" "lambda_api" {
-  name          = "u5kg-minecraft-server-api"
-  protocol_type = "HTTP"
+# Lambdaリソースとメソッド
+resource "aws_api_gateway_resource" "minecraft_server" {
+  rest_api_id = aws_api_gateway_rest_api.lambda_api.id
+  parent_id   = aws_api_gateway_rest_api.lambda_api.root_resource_id
+  path_part   = "minecraft-server"
 }
 
-# API Gateway Authorizer
-resource "aws_apigatewayv2_authorizer" "basic_auth" {
-  api_id                            = aws_apigatewayv2_api.lambda_api.id
-  authorizer_type                   = "REQUEST"
-  name                              = "BasicAuthAuthorizer"
-  authorizer_uri                    = "arn:aws:apigateway:ap-northeast-1:lambda:path/2015-03-31/functions/${aws_lambda_function.basic_auth_authorizer.arn}/invocations"
-  identity_sources = ["$request.header.Authorization"]
-  authorizer_payload_format_version = "2.0"
+resource "aws_api_gateway_resource" "minecraft_server_start" {
+  rest_api_id = aws_api_gateway_rest_api.lambda_api.id
+  parent_id   = aws_api_gateway_resource.minecraft_server.id
+  path_part   = "start"
+}
+
+resource "aws_api_gateway_method" "start_method" {
+  rest_api_id   = aws_api_gateway_rest_api.lambda_api.id
+  resource_id   = aws_api_gateway_resource.minecraft_server_start.id
+  http_method   = "POST"
+  authorization = "CUSTOM"
+  authorizer_id = aws_api_gateway_authorizer.basic_auth.id
 }
 
 # API Gateway Integration
-resource "aws_apigatewayv2_integration" "lambda_integration" {
-  api_id                 = aws_apigatewayv2_api.lambda_api.id
-  integration_type       = "AWS_PROXY"
-  integration_uri        = aws_lambda_function.ec2_manager.arn
-  payload_format_version = "2.0"
-}
-
-# API Gateway Route with Basic Auth
-resource "aws_apigatewayv2_route" "lambda_route" {
-  api_id         = aws_apigatewayv2_api.lambda_api.id
-  route_key      = "POST /minecraft-server/start"
-  target         = "integrations/${aws_apigatewayv2_integration.lambda_integration.id}"
-  authorizer_id  = aws_apigatewayv2_authorizer.basic_auth.id
-  authorization_type = "CUSTOM"
-}
-
-resource "aws_apigatewayv2_stage" "api_stage" {
-  api_id      = aws_apigatewayv2_api.lambda_api.id
-  name        = "production"
-  auto_deploy = true
+resource "aws_api_gateway_integration" "start_integration" {
+  rest_api_id = aws_api_gateway_rest_api.lambda_api.id
+  resource_id = aws_api_gateway_resource.minecraft_server_start.id
+  http_method = aws_api_gateway_method.start_method.http_method
+  type        = "AWS_PROXY"
+  integration_http_method = "POST"
+  uri         = aws_lambda_function.ec2_manager.invoke_arn
 }
 
 # Lambda Permission for API Gateway
@@ -187,6 +176,41 @@ resource "aws_lambda_permission" "allow_apigateway" {
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.ec2_manager.function_name
   principal     = "apigateway.amazonaws.com"
-  source_arn    = "${aws_apigatewayv2_api.lambda_api.execution_arn}/*"
+  source_arn    = "${aws_api_gateway_rest_api.lambda_api.execution_arn}/*"
 }
 
+# API Gateway Authorizer for Basic Auth
+resource "aws_api_gateway_authorizer" "basic_auth" {
+  name                   = "BasicAuthAuthorizer"
+  rest_api_id            = aws_api_gateway_rest_api.lambda_api.id
+  authorizer_uri         = "arn:aws:apigateway:ap-northeast-1:lambda:path/2015-03-31/functions/${aws_lambda_function.basic_auth_authorizer.arn}/invocations"
+  type                   = "REQUEST"
+  identity_source        = "method.request.header.Authorization"
+  authorizer_result_ttl_in_seconds = 0
+}
+
+# デプロイメント
+resource "aws_api_gateway_deployment" "deployment" {
+  rest_api_id = aws_api_gateway_rest_api.lambda_api.id
+
+  depends_on = [
+    aws_api_gateway_method.start_method,
+    aws_api_gateway_integration.start_integration
+  ]
+}
+
+# Productionステージ
+resource "aws_api_gateway_stage" "production" {
+  deployment_id = aws_api_gateway_deployment.deployment.id
+  rest_api_id   = aws_api_gateway_rest_api.lambda_api.id
+  stage_name    = "production"
+  description   = "Production stage"
+}
+
+resource "aws_lambda_permission" "allow_apigateway_authorizer" {
+  statement_id  = "AllowExecutionFromAPIGatewayAuthorizer"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.basic_auth_authorizer.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_api_gateway_rest_api.lambda_api.execution_arn}/*"
+}
