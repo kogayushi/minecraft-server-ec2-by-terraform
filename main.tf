@@ -29,7 +29,7 @@ resource "aws_instance" "minecraft_server" {
   ami           = "ami-018a608de9486664d"
   instance_type = "t4g.small"
   key_name      = "minecraft-server"
-  user_data = file("${path.module}/ec2_user_data.sh")
+  user_data     = file("${path.module}/ec2_user_data.sh")
   tags = {
     Name = "minecraft_server"
   }
@@ -81,12 +81,13 @@ resource "aws_iam_role_policy_attachment" "lambda_ec2_attach" {
   policy_arn = aws_iam_policy.lambda_ec2_policy.arn
 }
 
-# Lambda Function
+# Lambda Function for EC2 Management
 data "archive_file" "ec2_starter_lambda_function_payload" {
   type        = "zip"
   source_dir  = "${path.module}/lambda/ec2_starter"
   output_path = "${path.module}/build/ec2_starter/lambda_function_payload.zip"
 }
+
 resource "aws_lambda_function" "ec2_manager" {
   filename         = "${path.module}/build/ec2_starter/lambda_function_payload.zip"
   function_name    = "ec2-manager"
@@ -95,18 +96,49 @@ resource "aws_lambda_function" "ec2_manager" {
   runtime          = "python3.9"
   source_code_hash = data.archive_file.ec2_starter_lambda_function_payload.output_base64sha256
   timeout          = 30
+
   environment {
     variables = {
       EC2_INSTANCE_ID = aws_instance.minecraft_server.id
     }
   }
 }
-
 # Lambda Permissions for CloudWatch Logs
-resource "aws_lambda_permission" "allow_cloudwatch" {
+resource "aws_lambda_permission" "ec2_manager_allow_cloudwatch" {
   statement_id  = "AllowExecutionFromCloudWatch"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.ec2_manager.function_name
+  principal     = "events.amazonaws.com"
+}
+
+
+# Lambda Function for Basic Authentication
+data "archive_file" "basic_auth_lambda_function_payload" {
+  type        = "zip"
+  source_dir  = "${path.module}/lambda/basic_auth"
+  output_path = "${path.module}/build/basic_auth/lambda_function_payload.zip"
+}
+
+resource "aws_lambda_function" "basic_auth_authorizer" {
+  filename         = "${path.module}/build/basic_auth/lambda_function_payload.zip"
+  function_name    = "basic-auth-authorizer"
+  handler          = "lambda_function.lambda_handler"
+  runtime          = "python3.9"
+  role             = aws_iam_role.lambda_ec2_role.arn
+
+  environment {
+    variables = {
+      BASIC_AUTH_USERNAME = var.basic_auth_username
+      BASIC_AUTH_PASSWORD = var.basic_auth_password
+    }
+  }
+}
+
+# Lambda Permissions for CloudWatch Logs
+resource "aws_lambda_permission" "basic_auth_allow_cloudwatch" {
+  statement_id  = "AllowExecutionFromCloudWatch"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.basic_auth_authorizer.function_name
   principal     = "events.amazonaws.com"
 }
 
@@ -116,6 +148,17 @@ resource "aws_apigatewayv2_api" "lambda_api" {
   protocol_type = "HTTP"
 }
 
+# API Gateway Authorizer
+resource "aws_apigatewayv2_authorizer" "basic_auth" {
+  api_id                            = aws_apigatewayv2_api.lambda_api.id
+  authorizer_type                   = "REQUEST"
+  name                              = "BasicAuthAuthorizer"
+  authorizer_uri                    = "arn:aws:apigateway:ap-northeast-1:lambda:path/2015-03-31/functions/${aws_lambda_function.basic_auth_authorizer.arn}/invocations"
+  identity_sources = ["$request.header.Authorization"]
+  authorizer_payload_format_version = "2.0"
+}
+
+# API Gateway Integration
 resource "aws_apigatewayv2_integration" "lambda_integration" {
   api_id                 = aws_apigatewayv2_api.lambda_api.id
   integration_type       = "AWS_PROXY"
@@ -123,11 +166,13 @@ resource "aws_apigatewayv2_integration" "lambda_integration" {
   payload_format_version = "2.0"
 }
 
+# API Gateway Route with Basic Auth
 resource "aws_apigatewayv2_route" "lambda_route" {
-  api_id    = aws_apigatewayv2_api.lambda_api.id
-  route_key = "POST /minecraft-server/start"
-
-  target = "integrations/${aws_apigatewayv2_integration.lambda_integration.id}"
+  api_id         = aws_apigatewayv2_api.lambda_api.id
+  route_key      = "POST /minecraft-server/start"
+  target         = "integrations/${aws_apigatewayv2_integration.lambda_integration.id}"
+  authorizer_id  = aws_apigatewayv2_authorizer.basic_auth.id
+  authorization_type = "CUSTOM"
 }
 
 resource "aws_apigatewayv2_stage" "api_stage" {
@@ -144,3 +189,4 @@ resource "aws_lambda_permission" "allow_apigateway" {
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_apigatewayv2_api.lambda_api.execution_arn}/*"
 }
+
