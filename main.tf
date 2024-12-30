@@ -82,7 +82,7 @@ resource "aws_iam_role_policy_attachment" "lambda_ec2_attach" {
 }
 
 # Lambda Function
-data "archive_file" "lambda_function_payload" {
+data "archive_file" "ec2_starter_lambda_function_payload" {
   type        = "zip"
   source_dir  = "${path.module}/lambda/ec2_starter"
   output_path = "${path.module}/build/ec2_starter/lambda_function_payload.zip"
@@ -93,7 +93,7 @@ resource "aws_lambda_function" "ec2_manager" {
   role             = aws_iam_role.lambda_ec2_role.arn
   handler          = "lambda_function.lambda_handler"
   runtime          = "python3.9"
-  source_code_hash = data.archive_file.lambda_function_payload.output_base64sha256
+  source_code_hash = data.archive_file.ec2_starter_lambda_function_payload.output_base64sha256
   timeout          = 30
   environment {
     variables = {
